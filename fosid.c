@@ -2,7 +2,7 @@
 //
 //   * scollegamento del dongle     -> pausa di tutto quello che sta suonando
 //   * 1 click                      -> pausa di tutte le app che riproducono
-//   * pressione lunga              -> riprende ciò che era stato messo in pausa
+//   * pressione lunga              -> riprende un'app alla volta tra quelle messe in pausa
 //   * 2 click / 3 click            -> traccia successiva / precedente
 //
 // Prende in esclusiva (seize) solo l'interfaccia HID del Fosi, quindi tastiera,
@@ -187,18 +187,20 @@ static void pause_all(bool merge) {
     CFRelease(apps);
 }
 
-// Riprende le app messe in pausa da noi. L'app "In riproduzione" riceve play solo se non c'è
-// niente da riprendere o se qualche app della lista non è scriptabile.
-static void resume_all(void) {
-    bool now_playing = CFArrayGetCount(paused) == 0;
-    for (CFIndex i = 0; i < CFArrayGetCount(paused); i++) {
-        CFStringRef id = CFArrayGetValueAtIndex(paused, i);
-        char buf[256];
-        logf_("play -> %s", cstr(id, buf, sizeof buf));
-        if (!script_app(id, true)) now_playing = true;
+// Riprende una sola app alla volta, nell'ordine in cui le abbiamo messe in pausa: ogni pressione
+// lunga fa ripartire la successiva. Senza niente da riprendere (o per un'app non scriptabile)
+// riceve play l'app "In riproduzione".
+static void resume_next(void) {
+    if (CFArrayGetCount(paused) == 0) {
+        MRSend(MR_PLAY, NULL);
+        return;
     }
-    if (now_playing) MRSend(MR_PLAY, NULL);
-    CFArrayRemoveAllValues(paused);
+    CFStringRef id = CFRetain(CFArrayGetValueAtIndex(paused, 0));
+    CFArrayRemoveValueAtIndex(paused, 0);
+    char buf[256];
+    logf_("play -> %s (ne restano %ld)", cstr(id, buf, sizeof buf), (long)CFArrayGetCount(paused));
+    if (!script_app(id, true)) MRSend(MR_PLAY, NULL);
+    CFRelease(id);
 }
 
 // Tasti volume del telecomando (se presenti): agiscono sull'uscita di default come i tasti di sistema.
@@ -241,7 +243,7 @@ static void on_button(bool pressed) {
             long_fired = true;
             clicks = 0;
             logf_("pressione lunga");
-            resume_all();
+            resume_next();
         });
     } else {
         down = false;
@@ -274,7 +276,7 @@ static void on_value(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
         if (on) {
             logf_("voice command");
             seq++, clicks = 0;
-            resume_all();
+            resume_next();
         }
         break;
     case U_VOLUP:   if (on) volume_step(+VOL_STEP); break;
